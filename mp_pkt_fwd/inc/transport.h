@@ -41,6 +41,8 @@ struct _server {
     bool critical;	    // Transport critical? Should connect at startup?
     int  sock_up;           // Semtech up socket
     int  sock_down;         // Semtech down socket
+    uint8_t  serv_filter;   // filtering bitmask
+    bool  priority;         // true if this is the ONE server which packages will always have priority in jit queue
     sem_t send_sem;         // semaphore for sending data
     pthread_t t_down;	    // semtech down thread
     pthread_t t_up;	    // upstream thread
@@ -56,6 +58,7 @@ void transport_stop();
 void transport_data_up(int nb_pkt, struct lgw_pkt_rx_s *rxpkt, bool send_report);
 void transport_status_up(uint32_t, uint32_t, uint32_t, uint32_t);
 void transport_send_downtraf(char *json, int len);
+bool transport_filter(char filter,unsigned char package_type,unsigned char package_netid,bool uplink);
 #endif // _TRANSPORT_H
 
 

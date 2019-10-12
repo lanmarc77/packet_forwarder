@@ -199,7 +199,29 @@ bool jit_collision_test(uint32_t p1_count_us, uint32_t p1_pre_delay, uint32_t p1
     }
 }
 
-enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, struct lgw_pkt_tx_s *packet, enum jit_pkt_type_e pkt_type) {
+/* non mutex protected dequeue action, BE AWARE to protect via mx_jit_queue from the caller side */
+void jit_dequeue_action(struct jit_queue_s *queue, int index, struct lgw_pkt_tx_s *packet,enum jit_pkt_type_e *pkt_type){
+    if(packet!=NULL){//if null the caller does not need the dequeued package
+	/* Dequeue requested packet */
+	memcpy(packet, &(queue->nodes[index].pkt), sizeof(struct lgw_pkt_tx_s));
+    }
+    queue->num_pkt--;
+    if( pkt_type !=NULL ) *pkt_type = queue->nodes[index].pkt_type;
+    if (queue->nodes[index].pkt_type == JIT_PKT_TYPE_BEACON) {
+	queue->num_beacon--;
+	MSG_DEBUG(DEBUG_BEACON, "--- Beacon dequeued ---\n");
+    }
+    /* Replace dequeued packet with last packet of the queue */
+    memcpy(&(queue->nodes[index]), &(queue->nodes[queue->num_pkt]), sizeof(struct jit_node_s));
+    memset(&(queue->nodes[queue->num_pkt]), 0, sizeof(struct jit_node_s));
+
+    /* Sort queue in ascending order of packet timestamp */
+    jit_sort_queue(queue);
+
+    MSG_DEBUG(DEBUG_JIT, "dequeued packet with count_us=%u from index %d\n", packet->count_us, index);
+}
+
+enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, struct lgw_pkt_tx_s *packet, enum jit_pkt_type_e pkt_type, bool prio_package) {
     int i = 0;
     uint32_t time_us = time->tv_sec * 1000000UL + time->tv_usec; /* convert time in µs */
     uint32_t packet_post_delay = 0;
@@ -207,6 +229,7 @@ enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, st
     uint32_t target_pre_delay = 0;
     enum jit_error_e err_collision;
     uint32_t asap_count_us;
+    uint8_t last_prio_package_index=0;
 
     MSG_DEBUG(DEBUG_JIT, "Current concentrator time is %u, pkt_type=%d\n", time_us, pkt_type);
 
@@ -215,7 +238,7 @@ enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, st
         return JIT_ERROR_INVALID;
     }
 
-    if (jit_queue_is_full(queue)) {
+    if (jit_queue_is_full(queue)&&(prio_package==false)) {//only return for a full queue if there is no possibility to drop lower prio packages
         MSG_DEBUG(DEBUG_JIT_ERROR, "ERROR: cannot enqueue packet, JIT queue is full\n");
         return JIT_ERROR_FULL;
     }
@@ -257,39 +280,63 @@ enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, st
                 - between 2 downlinks in the queue
             */
 
-            /* First, try if the ASAP time collides with an already enqueued downlink */
-            for (i=0; i<queue->num_pkt; i++) {
-                if (jit_collision_test(asap_count_us, packet_pre_delay, packet_post_delay, queue->nodes[i].pkt.count_us, queue->nodes[i].pre_delay, queue->nodes[i].post_delay) == true) {
-                    MSG_DEBUG(DEBUG_JIT, "DEBUG: cannot insert IMMEDIATE downlink at count_us=%u, collides with %u (index=%d)\n", asap_count_us, queue->nodes[i].pkt.count_us, i);
-                    break;
-                }
-            }
-            if (i == queue->num_pkt) {
-                /* No collision with ASAP time, we can insert it */
-                MSG_DEBUG(DEBUG_JIT, "DEBUG: insert IMMEDIATE downlink ASAP at %u (no collision)\n", asap_count_us);
-            } else {
-                /* Search for the best slot then */
-                for (i=0; i<queue->num_pkt; i++) {
-                    asap_count_us = queue->nodes[i].pkt.count_us + queue->nodes[i].post_delay + packet_pre_delay + TX_JIT_DELAY + TX_MARGIN_DELAY;
-                    if (i == (queue->num_pkt - 1)) {
-                        /* Last packet index, we can insert after this one */
-                        MSG_DEBUG(DEBUG_JIT, "DEBUG: insert IMMEDIATE downlink, last in JiT queue (count_us=%u)\n", asap_count_us);
-                    } else {
-                        /* Check if packet can be inserted between this index and the next one */
-                        MSG_DEBUG(DEBUG_JIT, "DEBUG: try to insert IMMEDIATE downlink (count_us=%u) between index %d and index %d?\n", asap_count_us, i, i+1);
-                        if (jit_collision_test(asap_count_us, packet_pre_delay, packet_post_delay, queue->nodes[i+1].pkt.count_us, queue->nodes[i+1].pre_delay, queue->nodes[i+1].post_delay) == true) {
-                            MSG_DEBUG(DEBUG_JIT, "DEBUG: failed to insert IMMEDIATE downlink (count_us=%u), continue...\n", asap_count_us);
-                            continue;
-                        } else {
-                            MSG_DEBUG(DEBUG_JIT, "DEBUG: insert IMMEDIATE downlink (count_us=%u)\n", asap_count_us);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+    	    /* First, try if the ASAP time collides with an already enqueued downlink */
+    	    for (i=0; i<queue->num_pkt; i++) {
+            	if (jit_collision_test(asap_count_us, packet_pre_delay, packet_post_delay, queue->nodes[i].pkt.count_us, queue->nodes[i].pre_delay, queue->nodes[i].post_delay) == true) {
+			if((prio_package==true)&&(queue->nodes[i].prio_package==false)){//for a high prio package skip low prio checks in queue as they will/could be removed later anyways
+			    continue;
+			}
+                	MSG_DEBUG(DEBUG_JIT, "DEBUG: cannot insert IMMEDIATE downlink at count_us=%u, collides with %u (index=%d)\n", asap_count_us, queue->nodes[i].pkt.count_us, i);
+                	break;
+		}
+    	    }
+    	    if (i == queue->num_pkt) {
+            	/* No collision (or removeable ones) with ASAP time, we can insert it */
+            	MSG_DEBUG(DEBUG_JIT, "DEBUG: insert IMMEDIATE downlink ASAP at %u (no collision)\n", asap_count_us);
+    	    } else {
+            	/* Search for the best slot then as the ASAP time was not collision free for high and low prio packages */
+            	for (i=0; i<queue->num_pkt; i++) {
+		    asap_count_us = queue->nodes[i].pkt.count_us + queue->nodes[i].post_delay + packet_pre_delay + TX_JIT_DELAY + TX_MARGIN_DELAY;
+            	    if (i == (queue->num_pkt - 1)) {
+			if(prio_package==false){//we do have a check upwards that will quit this function if for a low prio package the queue is full, so the last spot must be free here...
+                    	    /* Last packet index, we can insert after this one */
+                    	    MSG_DEBUG(DEBUG_JIT, "DEBUG: insert IMMEDIATE downlink, last in JiT queue (count_us=%u)\n", asap_count_us);
+			}else{//...but not not so for high prio packages
+			    if(queue->num_pkt == JIT_QUEUE_MAX){//if this is true it is clear, that no lower prio package can be removed, quit with jit_queue_full
+				//with prio enabled that should not happen? should not the prio server backend protect against this?
+    				MSG_DEBUG(DEBUG_JIT_ERROR, "ERROR: cannot enqueue high prio packet, JIT queue is full and no low prio packages can be removed\n");
+				pthread_mutex_unlock(&mx_jit_queue);
+    				return JIT_ERROR_FULL;
+			    }else{//high prio package collided with all other high prio packages in the queue, but there is still a free spot in the queue
+                    		MSG_DEBUG(DEBUG_JIT, "DEBUG: insert IMMEDIATE downlink, last in JiT queue (count_us=%u)\n", asap_count_us);
+			    }
+			}
+            	     } else {
+			if( prio_package==true){
+			    if(queue->nodes[i].prio_package==true){
+				last_prio_package_index=i;//remember the last high prio queue item
+			    }
+			    //insertion time is always right after the last seen high prio package in queue
+			    asap_count_us = queue->nodes[last_prio_package_index].pkt.count_us + queue->nodes[last_prio_package_index].post_delay + packet_pre_delay + TX_JIT_DELAY + TX_MARGIN_DELAY;
+			    if(queue->nodes[i+1].prio_package==false){
+				continue;//skip all collision checks for all low prio queue items until the next(=i+1) package is high prio
+			    }
+			}
+		    	/* Check if packet can be inserted between this index and the next one */
+                    	MSG_DEBUG(DEBUG_JIT, "DEBUG: try to insert IMMEDIATE downlink (count_us=%u) between index %d and index %d?\n", asap_count_us, last_prio_package_index, i+1);
+                    	if (jit_collision_test(asap_count_us, packet_pre_delay, packet_post_delay, queue->nodes[i+1].pkt.count_us, queue->nodes[i+1].pre_delay, queue->nodes[i+1].post_delay) == true) {
+                    	    MSG_DEBUG(DEBUG_JIT, "DEBUG: failed to insert IMMEDIATE downlink (count_us=%u), continue...\n", asap_count_us);
+                    	    continue;
+                    	} else {
+                    	    MSG_DEBUG(DEBUG_JIT, "DEBUG: insert IMMEDIATE downlink (count_us=%u)\n", asap_count_us);
+                    	    break;
+                    	}
+            	    }
+        	}
+	    }
+	}
         /* Set packet with ASAP timestamp */
-        packet->count_us = asap_count_us;
+    	packet->count_us = asap_count_us;
     }
 
     /* Check criteria_1: is it already too late to send this packet ?
@@ -326,6 +373,7 @@ enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, st
         }
     }
 
+
     /* Check criteria_3: does this new packet overlap with a packet already enqueued ?
      *  Note: - need to take into account packet's pre_delay and post_delay of each packet
      *        - Valid for both Downlinks and beacon packets
@@ -345,6 +393,11 @@ enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, st
          *      t_packet_new + post_delay_packet_new > t_packet_prev - pre_delay_packet_prev (OVERLAP on pre delay)
          */
         if (jit_collision_test(packet->count_us, packet_pre_delay, packet_post_delay, queue->nodes[i].pkt.count_us, target_pre_delay, queue->nodes[i].post_delay) == true) {
+	    if((prio_package==true) && (queue->nodes[i].prio_package==false)){
+		//mark the package here for deletion, as we do not know, if we will find a collision free solution at all
+		queue->nodes[i].delete_package=true;
+		continue;
+	    }
             switch (queue->nodes[i].pkt_type) {
                 case JIT_PKT_TYPE_DOWNLINK_CLASS_A:
                 case JIT_PKT_TYPE_DOWNLINK_CLASS_B:
@@ -364,17 +417,27 @@ enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, st
                     assert(0);
                     break;
             }
+	    for (i=0; i<queue->num_pkt; i++){//reset deletion as we could not find any collision free time frame
+		queue->nodes[i].delete_package=false;
+	    }
             pthread_mutex_unlock(&mx_jit_queue);
             return err_collision;
         }
     }
-
+    //dequeue all marked packages
+    for (i=0; i<queue->num_pkt; i++) {
+	if(queue->nodes[i].delete_package==true){
+	    jit_dequeue_action(queue,i,NULL,NULL);
+	    i=0;
+	}
+    }
     /* Finally enqueue it */
     /* Insert packet at the end of the queue */
     memcpy(&(queue->nodes[queue->num_pkt].pkt), packet, sizeof(struct lgw_pkt_tx_s));
     queue->nodes[queue->num_pkt].pre_delay = packet_pre_delay;
     queue->nodes[queue->num_pkt].post_delay = packet_post_delay;
     queue->nodes[queue->num_pkt].pkt_type = pkt_type;
+    queue->nodes[queue->num_pkt].prio_package = prio_package;
     if (pkt_type == JIT_PKT_TYPE_BEACON) {
         queue->num_beacon++;
     }
@@ -392,57 +455,13 @@ enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, st
     return JIT_ERROR_OK;
 }
 
-enum jit_error_e jit_dequeue(struct jit_queue_s *queue, int index, struct lgw_pkt_tx_s *packet, enum jit_pkt_type_e *pkt_type) {
-    if (packet == NULL) {
-        MSG("ERROR: invalid parameter\n");
-        return JIT_ERROR_INVALID;
-    }
-
-    if ((index < 0) || (index >= JIT_QUEUE_MAX)) {
-        MSG("ERROR: invalid parameter\n");
-        return JIT_ERROR_INVALID;
-    }
-
-    if (jit_queue_is_empty(queue)) {
-        MSG("ERROR: cannot dequeue packet, JIT queue is empty\n");
-        return JIT_ERROR_EMPTY;
-    }
-
-    pthread_mutex_lock(&mx_jit_queue);
-
-    /* Dequeue requested packet */
-    memcpy(packet, &(queue->nodes[index].pkt), sizeof(struct lgw_pkt_tx_s));
-    queue->num_pkt--;
-    *pkt_type = queue->nodes[index].pkt_type;
-    if (*pkt_type == JIT_PKT_TYPE_BEACON) {
-        queue->num_beacon--;
-        MSG_DEBUG(DEBUG_BEACON, "--- Beacon dequeued ---\n");
-    }
-
-    /* Replace dequeued packet with last packet of the queue */
-    memcpy(&(queue->nodes[index]), &(queue->nodes[queue->num_pkt]), sizeof(struct jit_node_s));
-    memset(&(queue->nodes[queue->num_pkt]), 0, sizeof(struct jit_node_s));
-
-    /* Sort queue in ascending order of packet timestamp */
-    jit_sort_queue(queue);
-
-    /* Done */
-    pthread_mutex_unlock(&mx_jit_queue);
-
-    jit_print_queue(queue, false, DEBUG_JIT);
-
-    MSG_DEBUG(DEBUG_JIT, "dequeued packet with count_us=%u from index %d\n", packet->count_us, index);
-
-    return JIT_ERROR_OK;
-}
-
-enum jit_error_e jit_peek(struct jit_queue_s *queue, struct timeval *time, int *pkt_idx) {
+enum jit_error_e jit_peek_and_dequeue(struct jit_queue_s *queue, struct timeval *time, struct lgw_pkt_tx_s *packet, enum jit_pkt_type_e *pkt_type) {
     /* Return index of node containing a packet inline with given time */
     int i = 0;
     int idx_highest_priority = -1;
     uint32_t time_us;
 
-    if ((time == NULL) || (pkt_idx == NULL)) {
+    if ((time == NULL)||(packet==NULL)) {
         MSG("ERROR: invalid parameter\n");
         return JIT_ERROR_INVALID;
     }
@@ -500,14 +519,14 @@ enum jit_error_e jit_peek(struct jit_queue_s *queue, struct timeval *time, int *
      *      t_packet < t_current + TX_JIT_DELAY
      */
     if ((queue->nodes[idx_highest_priority].pkt.count_us - time_us) < TX_JIT_DELAY) {
-        *pkt_idx = idx_highest_priority;
-        MSG_DEBUG(DEBUG_JIT, "peek packet with count_us=%u at index %d\n",
+        MSG_DEBUG(DEBUG_JIT, "peek and dequeue packet with count_us=%u at index %d\n",
             queue->nodes[idx_highest_priority].pkt.count_us, idx_highest_priority);
-    } else {
-        *pkt_idx = -1;
+	jit_dequeue_action(queue,idx_highest_priority,packet,pkt_type);
     }
 
     pthread_mutex_unlock(&mx_jit_queue);
+
+    jit_print_queue(queue, false, DEBUG_JIT);
 
     return JIT_ERROR_OK;
 }

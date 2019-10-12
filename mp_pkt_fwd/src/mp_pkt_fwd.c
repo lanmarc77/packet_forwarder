@@ -169,6 +169,9 @@ struct coord_s reference_coord;
 //TODO: Now there are 4 different mutual dependent booleans to describe the gps state, this is a code smell, make an enumeration.
 bool gps_fake_enable; /* fake coordinates override real coordinates */
 
+
+bool serv_filter=false; /* used to rember if at least one of the serves has a netid filter enabled. If so, only one package can be fetched from the gw at a time. */
+
 /* measurements to establish statistics */
 pthread_mutex_t mx_meas_up = PTHREAD_MUTEX_INITIALIZER; /* control access to the upstream measurements */
 uint32_t meas_up_network_byte = 0; /* sum of UDP bytes sent for upstream traffic */
@@ -728,11 +731,15 @@ static int parse_gateway_configuration(const char * conf_file) {
 	JSON_Value *val3 = NULL; /* needed to detect the absence of some fields */
 	JSON_Value *val4 = NULL; /* needed to detect the absence of some fields */
 	JSON_Value *val5 = NULL; /* needed to detect the absence of some fields */
+	JSON_Value *val6 = NULL; /* needed to detect the absence of some fields */
+	JSON_Value *val7 = NULL; /* needed to detect the absence of some fields */
+	JSON_Value *val8 = NULL; /* needed to detect the absence of some fields */
 	JSON_Array *confservers = NULL;
     const char *str; /* pointer to sub-strings in the JSON data */
     unsigned long long ull = 0;
 	int i; /* Loop variable */
 	int ic; /* Server counter */
+	bool prio_flag=false;	//used to detect if more than one server has the priority flag set
 
     /* try to parse JSON */
     root_val = json_parse_file_with_comments(conf_file);
@@ -778,6 +785,9 @@ static int parse_gateway_configuration(const char * conf_file) {
 			val3 = json_object_get_value(nw_server, "serv_max_stall");
 			val4 = json_object_get_value(nw_server, "serv_up_enabled");
 			val5 = json_object_get_value(nw_server, "serv_down_enabled");
+			val6 = json_object_get_value(nw_server, "priv_filter");
+			val7 = json_object_get_value(nw_server, "pub_filter");
+			val8 = json_object_get_value(nw_server, "priority");
 			vtype = json_object_get_string(nw_server, "serv_type");
 			vgwid = json_object_get_string(nw_server, "serv_gw_id");
 			vgwkey = json_object_get_string(nw_server, "serv_gw_key");
@@ -789,7 +799,24 @@ static int parse_gateway_configuration(const char * conf_file) {
 			if (val2 != NULL) snprintf(servers[ic].port_down, sizeof servers[ic].port_down, "%u", (uint16_t)json_value_get_number(val2));
 			if (val3 != NULL) servers[ic].max_stall = (int) json_value_get_number(val3); else servers[ic].max_stall = 0;
 			if (val4 != NULL) servers[ic].upstream = (bool) json_value_get_boolean(val4); 
-			if (val5 != NULL) servers[ic].downstream = (bool) json_value_get_boolean(val5); 
+			if (val5 != NULL) servers[ic].downstream = (bool) json_value_get_boolean(val5);
+			if (val6 != NULL) if((bool)json_value_get_boolean(val6)) servers[ic].serv_filter=5;
+			if (val7 != NULL) if((bool)json_value_get_boolean(val7)) servers[ic].serv_filter=10;
+			if(servers[ic].serv_filter!=0){
+			    if(!serv_filter){
+				MSG("INFO: Net id filter detected. Only one package per fetch cycle for gw\n");
+			    }
+			    serv_filter=true;
+			}
+			if (val8 != NULL) servers[ic].priority = (bool) json_value_get_boolean(val8);
+			if(servers[ic].priority){
+			    if(prio_flag){
+    				MSG("ERROR: More than one server entry has priority set to true. Only one is allowed!\n");
+			        exit(EXIT_FAILURE);
+			    }
+			    prio_flag=true;
+			}
+
 			if (vcrit != NULL) servers[ic].critical = (bool) json_value_get_boolean(vcrit); 
 			/* If there is no server name we can only silently progress to the next entry */
 			if (str == NULL) {
@@ -1718,6 +1745,11 @@ void thread_up(void) {
     /* allocate memory for packet fetching and processing */
     struct lgw_pkt_rx_s rxpkt[NB_PKT_MAX]; /* array containing inbound packets + metadata */
     int nb_pkt;
+    int nb_pkt_max_correct=0; //correction factor to only fetch one package per cycle if a serv_filter is defined
+    
+    if(serv_filter){
+	nb_pkt_max_correct=NB_PKT_MAX-1;
+    }
 
     /* report management variable */
     bool send_report = false;
@@ -1728,8 +1760,8 @@ void thread_up(void) {
 
         /* fetch packets */
         pthread_mutex_lock(&mx_concent);
-		if (radiostream_enabled == true) nb_pkt = lgw_receive(NB_PKT_MAX, rxpkt); else nb_pkt = 0;
-		if (ghoststream_enabled == true) nb_pkt = ghost_get(NB_PKT_MAX-nb_pkt, &rxpkt[nb_pkt]) + nb_pkt;
+		if (radiostream_enabled == true) nb_pkt = lgw_receive(NB_PKT_MAX-nb_pkt_max_correct, rxpkt); else nb_pkt = 0;
+		if (ghoststream_enabled == true) nb_pkt = ghost_get(NB_PKT_MAX-nb_pkt_max_correct-nb_pkt, &rxpkt[nb_pkt]) + nb_pkt;
         pthread_mutex_unlock(&mx_concent);
 
 
@@ -1749,7 +1781,11 @@ void thread_up(void) {
 
         /* wait a short time if no packets, nor status report */
         if ((nb_pkt == 0) && (send_report == false)) {
-            wait_ms(FETCH_SLEEP_MS);
+	    if(serv_filter){
+        	wait_ms(FETCH_SLEEP_MS/2);//smaller sleep time to avoid possible gw rx buffer overrungs, if only one package is fetched per cycle
+	    }else{
+        	wait_ms(FETCH_SLEEP_MS);
+	    }
             continue;
         }
 		
@@ -1795,7 +1831,6 @@ void print_tx_status(uint8_t tx_status) {
 void thread_jit(void) {
     int result = LGW_HAL_SUCCESS;
     struct lgw_pkt_tx_s pkt;
-    int pkt_index = -1;
     struct timeval current_unix_time;
     struct timeval current_concentrator_time;
     enum jit_error_e jit_result;
@@ -1810,11 +1845,8 @@ void thread_jit(void) {
         /* transfer data and metadata to the concentrator, and schedule TX */
         gettimeofday(&current_unix_time, NULL);
         get_concentrator_time(&current_concentrator_time, current_unix_time);
-        jit_result = jit_peek(&jit_queue, &current_concentrator_time, &pkt_index);
+        jit_result = jit_peek_and_dequeue(&jit_queue, &current_concentrator_time, &pkt, &pkt_type);
         if (jit_result == JIT_ERROR_OK) {
-            if (pkt_index > -1) {
-                jit_result = jit_dequeue(&jit_queue, pkt_index, &pkt, &pkt_type);
-                if (jit_result == JIT_ERROR_OK) {
                     /* update beacon stats */
                     if (pkt_type == JIT_PKT_TYPE_BEACON) {
 			increment_down(BEACON_SENT);
@@ -1851,12 +1883,9 @@ void thread_jit(void) {
 			increment_down(TX_OK);
                         MSG_DEBUG(DEBUG_PKT_FWD, "lgw_send done: count_us=%u\n", pkt.count_us);
                     }
-                } else {
-                	LOGGER("ERROR: jit_dequeue failed with %d\n", jit_result);
-                }
-            }
         } else if (jit_result == JIT_ERROR_EMPTY) {
             /* Do nothing, it can happen */
+	    //it could also mean, that it is no packages time to be send
         } else {
         	LOGGER("ERROR: jit_peek failed with %d\n", jit_result);
         }

@@ -65,6 +65,8 @@ struct jit_node_s {
     /* Internal fields */
     uint32_t pre_delay;             /* Amount of time before packet timestamp to be reserved */
     uint32_t post_delay;            /* Amount of time after packet timestamp to be reserved (time on air) */
+    bool prio_package;             // true if this package is a priority package and could kick out other non priority packages from the queue
+    bool delete_package;             // true if this package is marked for deletion
 };
 
 struct jit_queue_s {
@@ -108,41 +110,29 @@ void jit_queue_init(struct jit_queue_s *queue);
 @param time[in] Current concentrator time
 @param packet[in] Packet to be queued in JiT queue
 @param pkt_type[in] Type of packet to be queued: Downlink, Beacon
+@param prio_package[in] true if this is a priority package
 @return success if the function was able to queue the packet
 
 This function is typically used when a packet is received from server for downlink.
 It will check if packet can be queued, with several criterias. Once the packet is queued, it has to be
 sent over the air. So all checks should happen before the packet being actually in the queue.
 */
-enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, struct lgw_pkt_tx_s *packet, enum jit_pkt_type_e pkt_type);
+enum jit_error_e jit_enqueue(struct jit_queue_s *queue, struct timeval *time, struct lgw_pkt_tx_s *packet, enum jit_pkt_type_e pkt_type,bool prio_package);
 
 /**
-@brief Dequeue a packet from a Just-in-Time queue
-
-@param queue[in/out] Just in Time queue from which the packet should be removed
-@param index[in] in the queue where to get the packet to be removed
-@param packet[out] that was at index
-@param pkt_type[out] Type of packet dequeued: Downlink, Beacon
-@return success if the function was able to dequeue the packet
-
-This function is typically used when a packet is about to be placed on concentrator buffer for TX.
-The index is generally got using the jit_peek function.
-*/
-enum jit_error_e jit_dequeue(struct jit_queue_s *queue, int index, struct lgw_pkt_tx_s *packet, enum jit_pkt_type_e *pkt_type);
-
-/**
-@brief Check if there is a packet soon to be sent from the JiT queue.
+@brief Check if there is a packet soon to be sent from the JiT queue and dequeue it
 
 @param queue[in] Just in Time queue to parse for peeking a packet
 @param time[in] Current concentrator time
-@param pkt_idx[out] Packet index which is soon to be dequeued.
-@return success if the function was able to parse the queue. pkt_idx is set to -1 if no packet found.
+@param packet[out] that is was dequeued.
+@param pkt_type[out] Type of packet dequeued: Downlink, Beacon
+@return success if the function was able to parse the queue and dequeued a packet.
 
-This function is typically used to check in JiT queue if there is a packet soon to be sent.
+This function is typically used to check and dequeue in JiT queue if there is a packet soon to be sent.
 It search the packet with the highest priority in queue, and check if its timestamp is near
 enough the current concentrator time.
 */
-enum jit_error_e jit_peek(struct jit_queue_s *queue, struct timeval *time, int *pkt_idx);
+enum jit_error_e jit_peek_and_dequeue(struct jit_queue_s *queue, struct timeval *time, struct lgw_pkt_tx_s *packet, enum jit_pkt_type_e *pkt_type);
 
 /**
 @brief Debug function to print the queue's content on console

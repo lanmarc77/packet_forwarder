@@ -55,6 +55,8 @@ void transport_init() {
 		servers[i].sock_up = -1;
 		servers[i].sock_down = -1;
 		servers[i].queue = NULL;
+		servers[i].serv_filter = 0;
+		servers[i].priority = false;
 		sem_init(&servers[i].send_sem, 0, 0);
 	}
 }
@@ -98,20 +100,65 @@ void transport_stop() {
 	}
 }
 
+/*
+filter: the configuration value for the server filter from the json file, bit oriented:
+    0: if set, all (uplink) packages with net id 00/01 received by the gateway are not forwarded to the server
+    1: if set, all (uplink) packages with a different net id than 00/01 received by the gateway are not forwarded to the server
+    2: if set, all (downlink) packages received by this server with net id 00/01 are not send to the gateway
+    3: if set, all (downlink) packages received by this server with net id different than 00/01 are not send to the gateway
+package_type: the lorawan package type
+packagae_netid: the first octet of the network id
+uplink: true if uplink package (received by gw to be transmitted to server), false otherwise (received by server to be transmitted to gw)
+
+return: true if the package is not supposed to be sent
+*/
+bool transport_filter(char filter,unsigned char package_type,unsigned char package_netid,bool uplink){
+    bool retValue=false;
+    package_type=((package_type)>>5)&0x07;
+    if((filter!=0)&&(package_type>=2)&&(package_type<=5)){//only filter data packages
+        if(uplink==true){
+            if(filter&1){
+                if((package_netid==00)||(package_netid==01)){
+                    retValue=true;
+                }
+            }
+            if(filter&2){
+                if((package_netid!=00)&&(package_netid!=01)){
+                    retValue=true;
+                }
+            }
+        }else{
+            if(filter&4){
+                if((package_netid==00)||(package_netid==01)){
+                    retValue=true;
+                }
+            }
+            if(filter&8){
+                if((package_netid!=00)&&(package_netid!=01)){
+                    retValue=true;
+                }
+            }
+        }
+    }
+    return retValue;
+}
+
 void transport_data_up(int nb_pkt, struct lgw_pkt_rx_s *rxpkt, bool send_report) {
 	int i;
 	for (i = 0; i < MAX_SERVERS; i++) {
 		if (servers[i].enabled == true && servers[i].upstream == true) {
-			switch (servers[i].type) {
-				case semtech:
-					semtech_data_up(i, nb_pkt, rxpkt, send_report);
-					break;
-				case ttn_gw_bridge:
-					ttn_data_up(i, nb_pkt, rxpkt);
-					break;
-				case gwtraf:
-					gwtraf_data_up(i, nb_pkt, rxpkt);
-					break;
+			if(transport_filter(servers[i].serv_filter,rxpkt->payload[0],rxpkt->payload[4],true)==false){
+				switch (servers[i].type) {
+					case semtech:
+						semtech_data_up(i, nb_pkt, rxpkt, send_report);
+						break;
+					case ttn_gw_bridge:
+						ttn_data_up(i, nb_pkt, rxpkt);
+						break;
+					case gwtraf:
+						gwtraf_data_up(i, nb_pkt, rxpkt);
+						break;
+				}
 			}
 		}
 	}

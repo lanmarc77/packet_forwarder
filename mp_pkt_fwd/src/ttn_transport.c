@@ -132,7 +132,8 @@ void ttn_init(int idx) {
     }
 }
 
-void ttn_downlink(Router__DownlinkMessage *msg, __attribute__ ((unused)) void *arg) {
+//void ttn_downlink(Router__DownlinkMessage *msg, __attribute__ ((unused)) void *arg) {
+void ttn_downlink(Router__DownlinkMessage *msg, void *arg) {
     struct lgw_pkt_tx_s txpkt;
     bool sent_immediate = false; /* option to sent the packet immediately */
     enum jit_pkt_type_e downlink_type;
@@ -142,6 +143,7 @@ void ttn_downlink(Router__DownlinkMessage *msg, __attribute__ ((unused)) void *a
     char json[300], iso_timestamp[24];
     time_t system_time; 
     int i,j,buff_index;
+    struct _server *server=(struct _server *)arg;
     short x0, x1;
 
     MSG("INFO: [down] TTN received downlink %s\n",msg->has_payload ? "with payload" : "empty???");
@@ -282,7 +284,7 @@ void ttn_downlink(Router__DownlinkMessage *msg, __attribute__ ((unused)) void *a
 		    if (jit_result == JIT_ERROR_OK) {
 			gettimeofday(&current_unix_time, NULL);
 			get_concentrator_time(&current_concentrator_time, current_unix_time);
-			jit_result = jit_enqueue(&jit_queue, &current_concentrator_time, &txpkt, downlink_type);
+			jit_result = jit_enqueue(&jit_queue, &current_concentrator_time, &txpkt, downlink_type,server->priority);
 			if (jit_result != JIT_ERROR_OK) {
 			    switch (jit_result) {
 				case JIT_ERROR_FULL:
@@ -381,7 +383,7 @@ void ttn_connect(int idx) {
 	    if (waittime < 300) waittime = 2 * waittime;
 	}
 	ttngwc_init(&servers[idx].ttn, servers[idx].gw_id, 
-		    servers[idx].downstream == true ? &ttn_downlink : &ttn_dummy_downlink, NULL);
+		    servers[idx].downstream == true ? &ttn_downlink : &ttn_dummy_downlink, &servers[idx]);
 	if (!servers[idx].ttn) {
 	    MSG("ERROR: [TTN] Initialize server \"%s\" failed, retry in %d seconds\n",servers[idx].addr,waittime);
 	    // Will this ever recover? Retry anyway...

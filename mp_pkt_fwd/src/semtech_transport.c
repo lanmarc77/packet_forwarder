@@ -610,7 +610,7 @@ void semtech_thread_down(void* pic) {
                     /* Insert beacon packet in JiT queue */
                     gettimeofday(&current_unix_time, NULL);
                     get_concentrator_time(&current_concentrator_time, current_unix_time);
-                    jit_result = jit_enqueue(&jit_queue, &current_concentrator_time, &beacon_pkt, JIT_PKT_TYPE_BEACON);
+                    jit_result = jit_enqueue(&jit_queue, &current_concentrator_time, &beacon_pkt, JIT_PKT_TYPE_BEACON,servers[ic].priority);
                     if (jit_result == JIT_ERROR_OK) {
                         /* update stats */
 			increment_down(BEACON_QUEUED);
@@ -1021,57 +1021,59 @@ void semtech_thread_down(void* pic) {
                 txpkt.tx_mode = TIMESTAMPED;
             }
 
-            /* record measurement data */
-            pthread_mutex_lock(&mx_meas_dw);
-            meas_dw_dgram_acp[ic] += 1; /* count accepted datagrams with no JSON errors */
-            meas_dw_network_byte += msg_len; /* meas_dw_network_byte */
-            meas_dw_payload_byte += txpkt.size;
-            pthread_mutex_unlock(&mx_meas_dw);
+	    if(transport_filter(servers[ic].serv_filter,txpkt.payload[0],txpkt.payload[4],false)==false){
+        	/* record measurement data */
+        	pthread_mutex_lock(&mx_meas_dw);
+        	meas_dw_dgram_acp[ic] += 1; /* count accepted datagrams with no JSON errors */
+        	meas_dw_network_byte += msg_len; /* meas_dw_network_byte */
+        	meas_dw_payload_byte += txpkt.size;
+        	pthread_mutex_unlock(&mx_meas_dw);
 
-            /* check TX parameter before trying to queue packet */
-            jit_result = JIT_ERROR_OK;
-            if ((txpkt.freq_hz < tx_freq_min[txpkt.rf_chain]) || (txpkt.freq_hz > tx_freq_max[txpkt.rf_chain])) {
-                jit_result = JIT_ERROR_TX_FREQ;
-                LOGGER("ERROR: Packet REJECTED, unsupported frequency - %u (min:%u,max:%u)\n", txpkt.freq_hz, tx_freq_min[txpkt.rf_chain], tx_freq_max[txpkt.rf_chain]);
-            }
+        	/* check TX parameter before trying to queue packet */
+        	jit_result = JIT_ERROR_OK;
+        	if ((txpkt.freq_hz < tx_freq_min[txpkt.rf_chain]) || (txpkt.freq_hz > tx_freq_max[txpkt.rf_chain])) {
+            	    jit_result = JIT_ERROR_TX_FREQ;
+            	    LOGGER("ERROR: Packet REJECTED, unsupported frequency - %u (min:%u,max:%u)\n", txpkt.freq_hz, tx_freq_min[txpkt.rf_chain], tx_freq_max[txpkt.rf_chain]);
+        	}
 
-            if (jit_result == JIT_ERROR_OK) {
-		int pwr_level = -100;
-                for (i=0; i<txlut.size; i++) {
-                    if (txlut.lut[i].rf_power <= txpkt.rf_power &&
+        	if (jit_result == JIT_ERROR_OK) {
+		    int pwr_level = -100;
+            	    for (i=0; i<txlut.size; i++) {
+                	if (txlut.lut[i].rf_power <= txpkt.rf_power &&
 			  pwr_level < txlut.lut[i].rf_power) {
-			pwr_level = txlut.lut[i].rf_power;
-                    }
-                }
-		if (pwr_level != txpkt.rf_power) {
-		    LOGGER("INFO: RF Power adjusted to %d from %d\n", pwr_level, txpkt.rf_power);
-		    txpkt.rf_power = pwr_level;
+			    pwr_level = txlut.lut[i].rf_power;
+                	}
+            	    }
+		    if (pwr_level != txpkt.rf_power) {
+			LOGGER("INFO: RF Power adjusted to %d from %d\n", pwr_level, txpkt.rf_power);
+			txpkt.rf_power = pwr_level;
+		    }
+        	}
+
+        	/* insert packet to be sent into JIT queue */
+        	if (jit_result == JIT_ERROR_OK) {
+            	    gettimeofday(&current_unix_time, NULL);
+            	    get_concentrator_time(&current_concentrator_time, current_unix_time);
+            	    jit_result = jit_enqueue(&jit_queue, &current_concentrator_time, &txpkt, downlink_type,servers[ic].priority);
+            	    if (jit_result != JIT_ERROR_OK) {
+                	    LOGGER("ERROR: Packet REJECTED (jit error=%d)\n", jit_result);
+            	    }
+		    increment_down(TX_REQUESTED);
+        	}
+
+        	/* Send acknowledge datagram to server */
+        	send_tx_ack(ic, buff_down[1], buff_down[2], jit_result);
+
+		/* send to gwtraf */
+		j = snprintf((json + buff_index), 300-buff_index, ",\"jit_result\":%d}", jit_result);
+		if (j > 0) {
+		    buff_index += j;
 		}
-            }
-
-            /* insert packet to be sent into JIT queue */
-            if (jit_result == JIT_ERROR_OK) {
-                gettimeofday(&current_unix_time, NULL);
-                get_concentrator_time(&current_concentrator_time, current_unix_time);
-                jit_result = jit_enqueue(&jit_queue, &current_concentrator_time, &txpkt, downlink_type);
-                if (jit_result != JIT_ERROR_OK) {
-                	LOGGER("ERROR: Packet REJECTED (jit error=%d)\n", jit_result);
-                }
-		increment_down(TX_REQUESTED);
-            }
-
-            /* Send acknowledge datagram to server */
-            send_tx_ack(ic, buff_down[1], buff_down[2], jit_result);
-
-	    /* send to gwtraf */
-	    j = snprintf((json + buff_index), 300-buff_index, ",\"jit_result\":%d}", jit_result);
-	    if (j > 0) {
-		buff_index += j;
+		++buff_index;
+		/* end of JSON datagram payload */
+		json[buff_index] = 0; /* add string terminator, for safety */
+		transport_send_downtraf(json, ++buff_index);
 	    }
-	    ++buff_index;
-	    /* end of JSON datagram payload */
-	    json[buff_index] = 0; /* add string terminator, for safety */
-	    transport_send_downtraf(json, ++buff_index);
         }
     }
     MSG("INFO: End of downstream thread\n");

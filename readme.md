@@ -94,6 +94,15 @@ Please refer to the script header for more details.
 
 5. Changelog
 -------------
+### v3.0.25 + PP (PrivacyPrio) patch v0.1 - 2019-10-12 ###
+
+* added boolean parameters priv_filter, pub_filter and priority to server configuration directive
+* priv_filter: filters private net id packages,  if set true, all data uplink+downlink packages with net id 00/01 are not send to and not received by this server
+* pub_filter: filters public net id packages, if set true, all data uplink+downlink packages not having net id 00/01 are not send to and not received by this server
+* priority: if set true (only one server is allowed), all downlinks by this server are prioritized over all other servers, conflicting packages
+  of other servers in the jit queue will be silently dropped
+  if priority is enabled the fetch thread will only fetch one package from the gw per fetch cycle, the fetch cycle has therefore been made double
+  as fast, which adds additional cpu load (from 2.4% to 3.6%  on a pi zero w)
 
 ### v3.0.0 - 2016-05-19 ###
 
