@@ -94,6 +94,12 @@ Please refer to the script header for more details.
 
 5. Changelog
 -------------
+### v3.0.25 + PP (PrivacyPrio) patch v0.2 - 2019-10-12 ###
+
+- added ttn protocol transport filter
+- fixed debug output for jit debug
+- cleaned up code
+
 ### v3.0.25 + PP (PrivacyPrio) patch v0.1 - 2019-10-12 ###
 
 * added boolean parameters priv_filter, pub_filter and priority to server configuration directive
