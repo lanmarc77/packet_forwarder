@@ -1,6 +1,10 @@
 The Things Network Multi Protocol Packet Forwarder
 ==================================================
 
+
+**WARNING the prioritization functionality has not been tested.**
+
+
 Forked from devlaams Poly Packet Forwarder, reworked to include
 The Things Network gateway-connector protocol.
 
@@ -94,11 +98,14 @@ Please refer to the script header for more details.
 
 5. Changelog
 -------------
+
+**WARNING the prioritization functionality has not been tested.**
+
 ### v3.0.25 + PP (PrivacyPrio) patch v0.2 - 2019-10-12 ###
 
-- added ttn protocol transport filter
-- fixed debug output for jit debug
-- cleaned up code
+* added ttn protocol transport filter
+* fixed debug output for jit debug
+* cleaned up code
 
 ### v3.0.25 + PP (PrivacyPrio) patch v0.1 - 2019-10-12 ###
 
@@ -108,7 +115,7 @@ Please refer to the script header for more details.
 * priority: if set true (only one server is allowed), all downlinks by this server are prioritized over all other servers, conflicting packages
   of other servers in the jit queue will be silently dropped
   if priority is enabled the fetch thread will only fetch one package from the gw per fetch cycle, the fetch cycle has therefore been made double
-  as fast, which adds additional cpu load (from 2.4% to 3.6%  on a pi zero w)
+  as fast, which adds additional cpu load (from 2.4% to 3.6%  on a pi zero w). This feature has not been tested yet.
 
 ### v3.0.0 - 2016-05-19 ###
 
