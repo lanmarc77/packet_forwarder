@@ -132,7 +132,6 @@ void ttn_init(int idx) {
     }
 }
 
-//void ttn_downlink(Router__DownlinkMessage *msg, __attribute__ ((unused)) void *arg) {
 void ttn_downlink(Router__DownlinkMessage *msg, void *arg) {
     struct lgw_pkt_tx_s txpkt;
     bool sent_immediate = false; /* option to sent the packet immediately */
@@ -260,63 +259,65 @@ void ttn_downlink(Router__DownlinkMessage *msg, void *arg) {
 			txpkt.tx_mode = TIMESTAMPED;
 		    }
 
-		    /* check TX parameter before trying to queue packet */
-		    jit_result = JIT_ERROR_OK;
-		    if ((txpkt.freq_hz < tx_freq_min[txpkt.rf_chain]) || (txpkt.freq_hz > tx_freq_max[txpkt.rf_chain])) {
-			jit_result = JIT_ERROR_TX_FREQ;
-			MSG("ERROR: [down] Packet REJECTED, unsupported frequency - %u (min:%u,max:%u)\n", txpkt.freq_hz, tx_freq_min[txpkt.rf_chain], tx_freq_max[txpkt.rf_chain]);
-		    }
-		    if (jit_result == JIT_ERROR_OK) {
-			int pwr_level = -100;
-			for (i=0; i<txlut.size; i++) {
-			    if (txlut.lut[i].rf_power <= txpkt.rf_power &&
-			        pwr_level < txlut.lut[i].rf_power) {
-		                pwr_level = txlut.lut[i].rf_power;
-	                    }
-	                }
-			if (pwr_level != txpkt.rf_power) {
-			    MSG("INFO: RF Power adjusted to %d from %d\n", pwr_level, txpkt.rf_power);
-			    txpkt.rf_power = pwr_level;
-			}
-		    }
-
-		    /* insert packet to be sent into JIT queue */
-		    if (jit_result == JIT_ERROR_OK) {
-			gettimeofday(&current_unix_time, NULL);
-			get_concentrator_time(&current_concentrator_time, current_unix_time);
-			jit_result = jit_enqueue(&jit_queue, &current_concentrator_time, &txpkt, downlink_type,server->priority);
-			if (jit_result != JIT_ERROR_OK) {
-			    switch (jit_result) {
-				case JIT_ERROR_FULL:
-				case JIT_ERROR_COLLISION_PACKET:
-				    increment_down(TX_REJ_COLL_PACKET);
-				    break;
-				case JIT_ERROR_TOO_LATE:
-				    increment_down(TX_REJ_TOO_LATE);
-				    break;
-				case JIT_ERROR_TOO_EARLY:
-				    increment_down(TX_REJ_TOO_EARLY);
-				    break;
-				case JIT_ERROR_COLLISION_BEACON:
-				    increment_down(TX_REJ_COLL_BEACON);
-				    break;
-				default:
-				    break;
+		    if(transport_filter(server->serv_filter,txpkt.payload[0],txpkt.payload[4],false)==false){
+			/* check TX parameter before trying to queue packet */
+			jit_result = JIT_ERROR_OK;
+			if ((txpkt.freq_hz < tx_freq_min[txpkt.rf_chain]) || (txpkt.freq_hz > tx_freq_max[txpkt.rf_chain])) {
+				jit_result = JIT_ERROR_TX_FREQ;
+				MSG("ERROR: [down] Packet REJECTED, unsupported frequency - %u (min:%u,max:%u)\n", txpkt.freq_hz, tx_freq_min[txpkt.rf_chain], tx_freq_max[txpkt.rf_chain]);
 			    }
-			    MSG("ERROR: [down] Packet REJECTED (jit error=%d %s)\n", jit_result,jit_error(jit_result));
+			if (jit_result == JIT_ERROR_OK) {
+			    int pwr_level = -100;
+			    for (i=0; i<txlut.size; i++) {
+				if (txlut.lut[i].rf_power <= txpkt.rf_power &&
+			    	    pwr_level < txlut.lut[i].rf_power) {
+		            	    pwr_level = txlut.lut[i].rf_power;
+	                	}
+	            	    }
+			    if (pwr_level != txpkt.rf_power) {
+				MSG("INFO: RF Power adjusted to %d from %d\n", pwr_level, txpkt.rf_power);
+				txpkt.rf_power = pwr_level;
+			    }
 			}
-			increment_down(TX_REQUESTED);
-		    }
 
-		    j = snprintf((json + buff_index), 300-buff_index, 
-			",\"jit_result\":%d}", jit_result);
-		    if (j > 0) {
-			buff_index += j;
+			/* insert packet to be sent into JIT queue */
+			if (jit_result == JIT_ERROR_OK) {
+			    gettimeofday(&current_unix_time, NULL);
+			    get_concentrator_time(&current_concentrator_time, current_unix_time);
+			    jit_result = jit_enqueue(&jit_queue, &current_concentrator_time, &txpkt, downlink_type,server->priority);
+			    if (jit_result != JIT_ERROR_OK) {
+				switch (jit_result) {
+				    case JIT_ERROR_FULL:
+				    case JIT_ERROR_COLLISION_PACKET:
+					increment_down(TX_REJ_COLL_PACKET);
+					break;
+				    case JIT_ERROR_TOO_LATE:
+					increment_down(TX_REJ_TOO_LATE);
+					break;
+				    case JIT_ERROR_TOO_EARLY:
+					increment_down(TX_REJ_TOO_EARLY);
+					break;
+				    case JIT_ERROR_COLLISION_BEACON:
+					increment_down(TX_REJ_COLL_BEACON);
+					break;
+				    default:
+					break;
+				}
+				MSG("ERROR: [down] Packet REJECTED (jit error=%d %s)\n", jit_result,jit_error(jit_result));
+			    }
+			    increment_down(TX_REQUESTED);
+			}
+
+			j = snprintf((json + buff_index), 300-buff_index, 
+			    ",\"jit_result\":%d}", jit_result);
+			if (j > 0) {
+			    buff_index += j;
+			}
+			++buff_index;
+			/* end of JSON datagram payload */
+			json[buff_index] = 0; /* add string terminator, for safety */
+			transport_send_downtraf(json, ++buff_index);
 		    }
-		    ++buff_index;
-		    /* end of JSON datagram payload */
-		    json[buff_index] = 0; /* add string terminator, for safety */
-		    transport_send_downtraf(json, ++buff_index);
 		}
 		break;
 	    default:

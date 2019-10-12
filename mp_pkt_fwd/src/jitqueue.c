@@ -521,14 +521,15 @@ enum jit_error_e jit_peek_and_dequeue(struct jit_queue_s *queue, struct timeval 
     if ((queue->nodes[idx_highest_priority].pkt.count_us - time_us) < TX_JIT_DELAY) {
         MSG_DEBUG(DEBUG_JIT, "peek and dequeue packet with count_us=%u at index %d\n",
             queue->nodes[idx_highest_priority].pkt.count_us, idx_highest_priority);
+
 	jit_dequeue_action(queue,idx_highest_priority,packet,pkt_type);
+	pthread_mutex_unlock(&mx_jit_queue);
+	jit_print_queue(queue, false, DEBUG_JIT);
+	return JIT_ERROR_OK;
     }
 
     pthread_mutex_unlock(&mx_jit_queue);
-
-    jit_print_queue(queue, false, DEBUG_JIT);
-
-    return JIT_ERROR_OK;
+    return JIT_ERROR_EMPTY;
 }
 
 void jit_print_queue(struct jit_queue_s *queue, bool show_all, int debug_level) {
