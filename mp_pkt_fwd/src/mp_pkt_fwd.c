@@ -122,6 +122,8 @@ Modifications for multi protocol use: Jac Kersing
 #define STATUS_SIZE		3072
 #define TX_BUFF_SIZE    ((540 * NB_PKT_MAX) + 30 + STATUS_SIZE)
 
+//#define JIT_INJECTOR
+
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE VARIABLES (GLOBAL) ------------------------------------------- */
 
@@ -293,6 +295,7 @@ static int parse_gateway_configuration(const char * conf_file);
 void thread_up(void);
 void thread_gps(void);
 void thread_valid(void);
+void thread_jit_injector(void);
 void thread_jit(void);
 void thread_timersync(void);
 void thread_watchdog(void);
@@ -804,7 +807,7 @@ static int parse_gateway_configuration(const char * conf_file) {
 			if (val7 != NULL) if((bool)json_value_get_boolean(val7)) servers[ic].serv_filter=10;
 			if(servers[ic].serv_filter!=0){
 			    if(!serv_filter){
-				MSG("INFO: Net id filter detected. Only one package per fetch cycle for gw\n");
+				MSG("INFO: Net id filter detected and activated.\n");
 			    }
 			    serv_filter=true;
 			}
@@ -1416,6 +1419,7 @@ int main(int argc, char *argv[])
     pthread_t thrid_up;
     pthread_t thrid_gps;
     pthread_t thrid_valid;
+    pthread_t thrid_jit_injector;
     pthread_t thrid_jit;
     pthread_t thrid_timersync;
     pthread_t thrid_watchdog;
@@ -1601,7 +1605,18 @@ int main(int argc, char *argv[])
         MSG("ERROR: [main] impossible to create JIT thread\n");
         exit(EXIT_FAILURE);
 	}
+#ifdef JIT_INJECTOR
+	//jit injector start
+    i = pthread_create( &thrid_jit_injector, NULL, (void * (*)(void *))thread_jit_injector, NULL);
+    if (i != 0) {
+    	MSG("ERROR: [main] impossible to create JIT injector thread\n");
+    	exit(EXIT_FAILURE);
+	}
+#endif
     }
+
+
+
 
     // Timer synchronization needed for downstream ...
     if (gps_active == true || downstream_enabled == true) {
@@ -1713,6 +1728,9 @@ int main(int argc, char *argv[])
 
     //TODO: Dit heeft nawerk nodig
     pthread_cancel(thrid_jit); /* don't wait for jit thread */
+#ifdef JIT_INJECTOR
+    pthread_cancel(thrid_jit_injector); /* don't wait for jit injector thread */
+#endif
     if (gps_active == true) pthread_cancel(thrid_timersync); /* don't wait for timer sync thread */
 
 	if (ghoststream_enabled == true) ghost_stop();
@@ -1745,11 +1763,6 @@ void thread_up(void) {
     /* allocate memory for packet fetching and processing */
     struct lgw_pkt_rx_s rxpkt[NB_PKT_MAX]; /* array containing inbound packets + metadata */
     int nb_pkt;
-    int nb_pkt_max_correct=0; //correction factor to only fetch one package per cycle if a serv_filter is defined
-    
-    if(serv_filter){
-	nb_pkt_max_correct=NB_PKT_MAX-1;
-    }
 
     /* report management variable */
     bool send_report = false;
@@ -1760,8 +1773,8 @@ void thread_up(void) {
 
         /* fetch packets */
         pthread_mutex_lock(&mx_concent);
-		if (radiostream_enabled == true) nb_pkt = lgw_receive(NB_PKT_MAX-nb_pkt_max_correct, rxpkt); else nb_pkt = 0;
-		if (ghoststream_enabled == true) nb_pkt = ghost_get(NB_PKT_MAX-nb_pkt_max_correct-nb_pkt, &rxpkt[nb_pkt]) + nb_pkt;
+		if (radiostream_enabled == true) nb_pkt = lgw_receive(NB_PKT_MAX, rxpkt); else nb_pkt = 0;
+		if (ghoststream_enabled == true) nb_pkt = ghost_get(NB_PKT_MAX-nb_pkt, &rxpkt[nb_pkt]) + nb_pkt;
         pthread_mutex_unlock(&mx_concent);
 
 
@@ -1781,11 +1794,7 @@ void thread_up(void) {
 
         /* wait a short time if no packets, nor status report */
         if ((nb_pkt == 0) && (send_report == false)) {
-	    if(serv_filter){
-        	wait_ms(FETCH_SLEEP_MS/2);//smaller sleep time to avoid possible gw rx buffer overrungs, if only one package is fetched per cycle
-	    }else{
-        	wait_ms(FETCH_SLEEP_MS);
-	    }
+	    wait_ms(FETCH_SLEEP_MS);
             continue;
         }
 		
@@ -1826,6 +1835,80 @@ void print_tx_status(uint8_t tx_status) {
 
 
 /* -------------------------------------------------------------------------- */
+/* --- THREAD X: INJECTS DOWNLINK PACKETS TO BE SENT FROM JIT QUEUE AS _SIM PACKAGES --- */
+
+#ifdef JIT_INJECTOR
+void thread_jit_injector(void){
+    struct lgw_pkt_tx_s pkt;
+    bool priority=false;
+    struct timeval current_unix_time;
+    struct timeval current_concentrator_time;
+    enum jit_error_e jit_result = JIT_ERROR_OK;
+    enum jit_pkt_type_e downlink_type;
+    unsigned long send_time=0;
+
+    while(!exit_sig && !quit_sig){
+	wait_ms(50);
+	pkt.size=(rand()%5)+5;
+	priority=!((bool)(rand()%2));//creates more low prio packages
+	switch(rand()%10){
+	    case 0:
+	    case 1:
+	    case 2:
+	    case 3: downlink_type=JIT_PKT_TYPE_DOWNLINK_CLASS_A_SIM;
+		    break;
+	    case 4:
+	    case 5:
+	    case 6:
+	    case 7: downlink_type=JIT_PKT_TYPE_DOWNLINK_CLASS_B_SIM;
+		    break;
+	    case 8: downlink_type=JIT_PKT_TYPE_DOWNLINK_CLASS_C_SIM;
+		    pkt.datarate=DR_LORA_SF7;
+		    pkt.size=(rand()%5)+5;
+		    break;
+	}
+	pkt.modulation = MOD_LORA;
+	pkt.bandwidth=BW_125KHZ;
+	if(!priority){
+	    pkt.datarate=DR_LORA_SF9;
+	    send_time=7000000UL;
+	}else if (downlink_type!=JIT_PKT_TYPE_DOWNLINK_CLASS_C_SIM){
+	    send_time=2000000UL;
+	    switch((rand()%3)+3){
+		case 0: pkt.datarate=DR_LORA_SF7;
+			break;
+		case 1: pkt.datarate=DR_LORA_SF8;
+			break;
+		case 2: pkt.datarate=DR_LORA_SF9;
+			break;
+		case 3: pkt.datarate=DR_LORA_SF10;
+			break;
+		case 4: pkt.datarate=DR_LORA_SF11;
+			break;
+		case 5: pkt.datarate=DR_LORA_SF12;
+			break;
+	    }
+	    pkt.size=(rand()%25)+25;
+	}
+	pkt.coderate = CR_LORA_4_5;
+	pkt.invert_pol = false;
+        pkt.rf_chain = 0;
+	pkt.rf_power = 14;
+	
+	gettimeofday(&current_unix_time, NULL);
+    	get_concentrator_time(&current_concentrator_time, current_unix_time);
+	pkt.count_us=current_concentrator_time.tv_sec * 1000000UL + current_concentrator_time.tv_usec + send_time;
+	jit_result=jit_enqueue(&jit_queue, &current_concentrator_time, &pkt, downlink_type,priority);
+	if (jit_result != JIT_ERROR_OK) {
+        	LOGGER("ERROR: SIMULATION Packet REJECTED (jit error=%d)\n", jit_result);
+	}
+    	increment_down(TX_REQUESTED);
+
+    }
+    MSG("INFO: End of JIT injector thread\n");
+}
+#endif
+/* -------------------------------------------------------------------------- */
 /* --- THREAD 3: CHECKING PACKETS TO BE SENT FROM JIT QUEUE AND SEND THEM --- */
 
 void thread_jit(void) {
@@ -1848,8 +1931,14 @@ void thread_jit(void) {
         jit_result = jit_peek_and_dequeue(&jit_queue, &current_concentrator_time, &pkt, &pkt_type);
         if (jit_result == JIT_ERROR_OK) {
                     /* update beacon stats */
-                    if (pkt_type == JIT_PKT_TYPE_BEACON) {
+                    if ((pkt_type == JIT_PKT_TYPE_BEACON)||(pkt_type == JIT_PKT_TYPE_BEACON_SIM)) {
 			increment_down(BEACON_SENT);
+                    }
+                    if ((pkt_type == JIT_PKT_TYPE_BEACON_SIM)||(pkt_type == JIT_PKT_TYPE_DOWNLINK_CLASS_A_SIM)||(pkt_type == JIT_PKT_TYPE_DOWNLINK_CLASS_B_SIM)||(pkt_type == JIT_PKT_TYPE_DOWNLINK_CLASS_C_SIM)) {
+			//TODO: simulate fitting waiting time for sending a package
+			//wait_ms(1);
+			increment_down(TX_OK);
+			continue;
                     }
 
                     /* check if concentrator is free for sending new packet */

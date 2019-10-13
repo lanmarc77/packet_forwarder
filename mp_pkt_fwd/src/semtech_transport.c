@@ -1211,6 +1211,9 @@ void semtech_upstream(void *pic) {
 	pkt_in_dgram = 0;
 	for (i=0; i < entry->nbpkt; ++i) {
 	    p = &rxpkt[i];
+	    if(transport_filter(servers[idx].serv_filter,p->payload[0],p->payload[4],true)==true){
+		continue;
+	    }
 
 	    /* basic packet filtering */
 	    /* Note that in this handling some errors can occur the should not occur. We changed these

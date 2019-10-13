@@ -303,6 +303,9 @@ void gwtraf_upstream(void *pic) {
 	/* serialize one Lora packet metadata and payload */
 	for (i=0; i < entry->nbpkt; ++i) {
 	    p = &rxpkt[i];
+	    if(transport_filter(servers[idx].serv_filter,p->payload[0],p->payload[4],true)==true){
+		continue;
+	    }
 	    buff_index = strt;
 
 	    /* basic packet filtering */

@@ -147,18 +147,16 @@ void transport_data_up(int nb_pkt, struct lgw_pkt_rx_s *rxpkt, bool send_report)
 	int i;
 	for (i = 0; i < MAX_SERVERS; i++) {
 		if (servers[i].enabled == true && servers[i].upstream == true) {
-			if(transport_filter(servers[i].serv_filter,rxpkt->payload[0],rxpkt->payload[4],true)==false){
-				switch (servers[i].type) {
-					case semtech:
-						semtech_data_up(i, nb_pkt, rxpkt, send_report);
-						break;
-					case ttn_gw_bridge:
-						ttn_data_up(i, nb_pkt, rxpkt);
-						break;
-					case gwtraf:
-						gwtraf_data_up(i, nb_pkt, rxpkt);
-						break;
-				}
+			switch (servers[i].type) {
+				case semtech:
+					semtech_data_up(i, nb_pkt, rxpkt, send_report);
+					break;
+				case ttn_gw_bridge:
+					ttn_data_up(i, nb_pkt, rxpkt);
+					break;
+				case gwtraf:
+					gwtraf_data_up(i, nb_pkt, rxpkt);
+					break;
 			}
 		}
 	}

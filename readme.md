@@ -2,7 +2,7 @@ The Things Network Multi Protocol Packet Forwarder
 ==================================================
 
 
-**WARNING the prioritization functionality has not been tested.**
+**WARNING the prioritization functionality has only been tested with (lots of) simulated node data.**
 
 
 Forked from devlaams Poly Packet Forwarder, reworked to include
@@ -99,7 +99,13 @@ Please refer to the script header for more details.
 5. Changelog
 -------------
 
-**WARNING the prioritization functionality has not been tested.**
+**WARNING the prioritization functionality has only been tested with (lots of) simulated node data.**
+
+### v3.0.25 + PP (PrivacyPrio) patch v0.21 - 2019-10-13 ###
+
+* added gwtraf protocol transport filter
+* moved filter into each protocols sending stage so that again 8 packets can be fetched per cycle, no more higher CPU load
+* tested priority heavily with internally simulated downlink data (thread_jit_injector) and fixed all bugs detected
 
 ### v3.0.25 + PP (PrivacyPrio) patch v0.2 - 2019-10-12 ###
 

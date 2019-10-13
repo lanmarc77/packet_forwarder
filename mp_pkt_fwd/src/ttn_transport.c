@@ -499,7 +499,9 @@ void ttn_upstream(void *pic) {
 	rxpkt = entry->data;
 	for (i=0; i < entry->nbpkt; ++i) {
 	    p = &rxpkt[i];
-
+	    if(transport_filter(servers[idx].serv_filter,p->payload[0],p->payload[4],true)==true){
+		continue;
+	    }
 	    // Skip any packet received where modulation is not LoRa or FSK
 	    if (p->modulation != MOD_LORA && p->modulation != MOD_FSK) {
 		continue;
