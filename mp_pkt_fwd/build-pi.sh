@@ -52,7 +52,7 @@ fi
 
 # make sure we get the latest
 rm -rf packet_forwarder
-git clone https://github.com/kersing/packet_forwarder.git  || { echo 'Cloning packet forwarder failed.' ; exit 1; }
+git clone https://github.com/lanmarc77/packet_forwarder.git  || { echo 'Cloning packet forwarder failed.' ; exit 1; }
 
 if [ ! -d protobuf ]; then
     git clone https://github.com/google/protobuf.git  || { echo 'Cloning protobuf failed.' ; exit 1; }

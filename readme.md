@@ -2,7 +2,7 @@ The Things Network Multi Protocol Packet Forwarder
 ==================================================
 
 
-**WARNING the prioritization functionality has only been tested with (lots of) simulated node data.**
+**WARNING the prioritization/privacy functionality has only been tested with (lots of) simulated node data. I am running it since 3 month as a daily driver though with no problems.**
 
 
 Forked from devlaams Poly Packet Forwarder, reworked to include
@@ -99,7 +99,12 @@ Please refer to the script header for more details.
 5. Changelog
 -------------
 
-**WARNING the prioritization functionality has only been tested with (lots of) simulated node data.**
+**WARNING the prioritization/privacy functionality has only been tested with (lots of) simulated node data. I am running it since 3 month as a daily driver though with no problems.**
+
+### v3.0.26 + PP (PrivacyPrio) patch v0.21 - 2019-26-12 ###
+
+* merged remote changes from upstream/kersing
+* change build-pi.sh so that this repository with the path is pulled and build and not upstream/kersing
 
 ### v3.0.25 + PP (PrivacyPrio) patch v0.21 - 2019-10-13 ###
 
