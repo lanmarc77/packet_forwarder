@@ -8,8 +8,12 @@ INSTALL_DIR="/opt/ttn-gateway"
 mkdir -p $INSTALL_DIR/dev
 cd $INSTALL_DIR/dev
 
+apt-get update
+apt-get -y install git sudo gcc make pkg-config protobuf-compiler libprotobuf-dev libprotobuf-c-dev libprotoc-dev automake libtool autoconf python-dev python-rpi.gpio
+
 if [ ! -d wiringPi ]; then
-    git clone git://git.drogon.net/wiringPi  || { echo 'Cloning wiringPi failed.' ; exit 1; }
+    git clone https://github.com/WiringPi/WiringPi.git  || { echo 'Cloning wiringPi failed.' ; exit 1; }
+    mv wiringPi WiringPi
     cd wiringPi
 else
     cd wiringPi
@@ -62,9 +66,6 @@ else
     git pull
     cd ..
 fi
-
-apt-get update
-apt-get -y install protobuf-compiler libprotobuf-dev libprotoc-dev automake libtool autoconf python-dev python-rpi.gpio
 
 cd $INSTALL_DIR/dev/lora_gateway/libloragw
 sed -i -e 's/PLATFORM= .*$/PLATFORM= imst_rpi/g' library.cfg
