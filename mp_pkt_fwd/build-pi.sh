@@ -9,7 +9,7 @@ mkdir -p $INSTALL_DIR/dev
 cd $INSTALL_DIR/dev
 
 apt-get update
-apt-get -y install git sudo gcc make pkg-config protobuf-compiler libprotobuf-dev libprotobuf-c-dev libprotoc-dev automake libtool autoconf python-dev python-rpi.gpio libtool-bin gettext protobuf-c-compiler gettext-base
+apt-get -y install git sudo gcc g++ make pkg-config protobuf-compiler libprotobuf-dev libprotobuf-c-dev libprotoc-dev automake libtool autoconf python-dev python-rpi.gpio libtool-bin gettext protobuf-c-compiler gettext-base
 
 if [ ! -d wiringPi ]; then
     git clone https://github.com/WiringPi/WiringPi.git  || { echo 'Cloning wiringPi failed.' ; exit 1; }
